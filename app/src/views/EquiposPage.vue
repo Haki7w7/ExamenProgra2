@@ -68,20 +68,24 @@
         </div>
 
         <ion-list lines="full">
-          <ion-item
-            v-for="equipo in equipos"
-            :key="equipo.id"
-            :router-link="`/tabs/equipos/${equipo.id}/editar`"
-            detail
-          >
-            <ion-label>
-              <h2>{{ equipo.nombre }}</h2>
-              <p>{{ equipo.codigo }} · {{ equipo.categoria.nombre }}</p>
-            </ion-label>
-            <ion-badge slot="end" :color="colorEstado[equipo.estado]">
-              {{ equipo.estado }}
-            </ion-badge>
-          </ion-item>
+          <ion-item-sliding v-for="equipo in equipos" :key="equipo.id">
+            <ion-item :router-link="`/tabs/equipos/${equipo.id}/editar`" detail>
+              <ion-label>
+                <h2>{{ equipo.nombre }}</h2>
+                <p>{{ equipo.codigo }} · {{ equipo.categoria.nombre }}</p>
+              </ion-label>
+              <ion-badge slot="end" :color="colorEstado[equipo.estado]">
+                {{ equipo.estado }}
+              </ion-badge>
+            </ion-item>
+
+            <ion-item-options side="end">
+              <ion-item-option color="danger" @click="confirmarEliminacion(equipo, $event)">
+                <ion-icon slot="start" :icon="trashOutline" aria-hidden="true" />
+                Eliminar
+              </ion-item-option>
+            </ion-item-options>
+          </ion-item-sliding>
         </ion-list>
       </template>
 
@@ -106,9 +110,6 @@ import { eliminar, listar, type Equipo, type Estado } from '@/services/equipos';
 import { ErrorApi } from '@/services/errores';
 import { mostrarToast } from '@/services/avisos';
 import { useConexion, vibrar } from '@/composables/useConexion';
-
-// Importaciones disponibles para M6 (evita advertencias mientras no las use)
-void [IonItemSliding, IonItemOptions, IonItemOption, trashOutline];
 
 const colorEstado: Record<Estado, string> = { disponible: 'success', prestado: 'warning', mantenimiento: 'medium' };
 
@@ -181,6 +182,10 @@ async function cargarMas(evento: InfiniteScrollCustomEvent) {
   }
 }
 
+function quitarDeLista(id: number) {
+  equipos.value = equipos.value.filter((item) => item.id !== id);
+}
+
 /**
  * TODO [M6] confirmarEliminacion(equipo, evento)
  *  1. Cierre el ion-item-sliding.
@@ -192,8 +197,37 @@ async function cargarMas(evento: InfiniteScrollCustomEvent) {
  *       404 → quitarlo de la lista y avisar que ya no existe.
  */
 async function confirmarEliminacion(equipo: Equipo, evento: Event) {
-  void [equipo, evento, alertController, ErrorApi, mostrarToast, vibrar, eliminar];
-}
+  const deslizable = (evento.target as HTMLElement | null)?.closest('ion-item-sliding');
+  await deslizable?.close();
 
-void [confirmarEliminacion];
+  const alerta = await alertController.create({
+    header: 'Eliminar equipo',
+    message: `¿Desea eliminar "${equipo.nombre}" (${equipo.codigo})?`,
+    buttons: [
+      { text: 'Cancelar', role: 'cancel' },
+      { text: 'Eliminar', role: 'destructive' },
+    ],
+  });
+  await alerta.present();
+
+  const { role } = await alerta.onDidDismiss();
+  if (role !== 'destructive') return;
+
+  try {
+    await eliminar(equipo.id);
+    quitarDeLista(equipo.id);
+    await vibrar();
+    await mostrarToast('Equipo eliminado.', 'success');
+  } catch (err) {
+    if (err instanceof ErrorApi && err.status === 409) {
+      await mostrarToast(err.cuerpo?.mensaje ?? err.message, 'warning');
+    } else if (err instanceof ErrorApi && err.status === 404) {
+      quitarDeLista(equipo.id);
+      await mostrarToast('El equipo ya no existe.', 'warning');
+    } else {
+      const mensaje = err instanceof ErrorApi ? err.message : 'No fue posible eliminar el equipo.';
+      await mostrarToast(mensaje, 'danger');
+    }
+  }
+}
 </script>
