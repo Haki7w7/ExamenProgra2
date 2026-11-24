@@ -54,8 +54,8 @@ Cada comentario `TODO` describe exactamente lo que se espera. Los archivos marca
 
 ## Evidencia (M8)
 
-Guarde en `app/docs/evidencia-android.png` una captura de **su** app corriendo en el emulador,
-en la pestaña **Perfil** (debe verse *Plataforma: android*), y complete:
+Guarde en `app/docs/evidencia-android.png` una captura de la app corriendo en el emulador,
+en la pestaña perfil, y complete:
 
 - Carné: C5I932
 - appId: cr.ac.ucr.if0009.c5i932
