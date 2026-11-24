@@ -68,7 +68,7 @@
 </template>
 
 <script setup lang="ts">
-import { reactive, ref } from 'vue';
+import { computed, reactive, ref } from 'vue';
 import {
   IonPage, IonHeader, IonToolbar, IonButtons, IonBackButton, IonTitle, IonContent, IonList, IonItem,
   IonInput, IonSelect, IonSelectOption, IonLabel, IonButton,
@@ -81,7 +81,7 @@ import { useConexion, vibrar } from '@/composables/useConexion';
 
 // id llega por props: true en la ruta equipos/:id/editar; en equipos/nuevo es undefined
 const props = defineProps<{ id?: string }>();
-const id = props.id;
+const id = computed(() => props.id);
 
 const ionRouter = useIonRouter();
 const { conectado } = useConexion();
@@ -96,6 +96,38 @@ const listaCategorias = ref<Categoria[]>([]);
 const estadoActual = ref<Estado>('disponible');
 const errores = ref<Record<string, string>>({});
 
+function volverALista() {
+  if (ionRouter.canGoBack()) {
+    ionRouter.back();
+  } else {
+    ionRouter.navigate('/tabs/equipos', 'back', 'replace');
+  }
+}
+
+function normalizarCosto(valor: number | string | null | undefined): number | null {
+  if (valor === null || valor === undefined) return null;
+  const texto = String(valor).trim();
+  if (texto === '') return null;
+  const numero = Number(texto);
+  return Number.isNaN(numero) ? null : numero;
+}
+
+function construirCuerpo(): DatosEquipo {
+  const cuerpo: DatosEquipo = {
+    codigo: datos.codigo.trim().toUpperCase(),
+    nombre: datos.nombre.trim(),
+    categoria_id: datos.categoria_id !== null ? Number(datos.categoria_id) : null,
+    fecha_adquisicion: datos.fecha_adquisicion,
+    costo_interno: normalizarCosto(datos.costo_interno),
+  };
+
+  if (estadoActual.value !== 'prestado') {
+    cuerpo.estado = datos.estado ?? 'disponible';
+  }
+
+  return cuerpo;
+}
+
 /**
  * TODO [M5] Al entrar a la página:
  *  - Cargar las categorías para el ion-select (categorias()).
@@ -106,7 +138,34 @@ const errores = ref<Record<string, string>>({});
  */
 onIonViewWillEnter(async () => {
   errores.value = {};
-  void [categorias, obtener, listaCategorias, estadoActual, ionRouter];
+  Object.assign(datos, vacio());
+  estadoActual.value = 'disponible';
+
+  try {
+    if (props.id) {
+      const [cats, equipo] = await Promise.all([categorias(), obtener(props.id)]);
+      listaCategorias.value = cats;
+      estadoActual.value = equipo.estado;
+      Object.assign(datos, {
+        codigo: equipo.codigo,
+        nombre: equipo.nombre,
+        categoria_id: equipo.categoria.id,
+        estado: equipo.estado === 'prestado' ? undefined : equipo.estado,
+        fecha_adquisicion: equipo.fecha_adquisicion,
+        costo_interno: null,
+      });
+    } else {
+      listaCategorias.value = await categorias();
+    }
+  } catch (error) {
+    if (error instanceof ErrorApi && error.status === 404) {
+      await mostrarToast('El equipo ya no existe.', 'warning');
+      volverALista();
+      return;
+    }
+    const mensaje = error instanceof ErrorApi ? error.message : 'No fue posible cargar los datos del formulario.';
+    await mostrarToast(mensaje, 'danger');
+  }
 });
 
 /**
@@ -120,6 +179,36 @@ onIonViewWillEnter(async () => {
  *     404 → toast "El equipo ya no existe."   ·   otros → toast genérico.
  */
 async function guardar() {
-  void [loadingController, actualizar, crear, ErrorApi, mostrarToast, vibrar];
+  errores.value = {};
+  const cargador = await loadingController.create({ message: 'Guardando…' });
+  await cargador.present();
+
+  let guardadoExitoso = false;
+  try {
+    const cuerpo = construirCuerpo();
+    if (props.id) {
+      await actualizar(props.id, cuerpo);
+    } else {
+      await crear(cuerpo);
+    }
+    guardadoExitoso = true;
+  } catch (error) {
+    if (error instanceof ErrorApi && error.status === 422) {
+      errores.value = error.erroresPorCampo;
+    } else if (error instanceof ErrorApi && error.status === 404) {
+      await mostrarToast('El equipo ya no existe.', 'warning');
+    } else {
+      const mensaje = error instanceof ErrorApi ? error.message : 'No fue posible guardar el equipo.';
+      await mostrarToast(mensaje, 'danger');
+    }
+  } finally {
+    await cargador.dismiss();
+  }
+
+  if (guardadoExitoso) {
+    await vibrar();
+    await mostrarToast(props.id ? 'Equipo actualizado.' : 'Equipo creado.', 'success');
+    volverALista();
+  }
 }
 </script>
