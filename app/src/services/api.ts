@@ -28,7 +28,82 @@ export interface OpcionesApi {
  *     Si el estado es 401 (y la ruta no es /login): await olvidarSesion() y router.replace('/login').
  *  8. En cualquier otro caso, devolver el cuerpo JSON.
  */
+function construirUrl(ruta: string, params?: Record<string, string | number | undefined>): string {
+  const urlBase = `${(BASE_URL ?? '').replace(/\/+$/, '')}${ruta}`;
+  if (!params) return urlBase;
+
+  const query = new URLSearchParams();
+  for (const [clave, valor] of Object.entries(params)) {
+    if (valor !== undefined && valor !== '') {
+      query.set(clave, String(valor));
+    }
+  }
+
+  const queryString = query.toString();
+  return queryString ? `${urlBase}?${queryString}` : urlBase;
+}
+
+function construirEncabezados(tieneCuerpo: boolean): Record<string, string> {
+  const encabezados: Record<string, string> = {
+    Accept: 'application/json',
+  };
+
+  const token = obtenerToken();
+  if (token) {
+    encabezados.Authorization = `Bearer ${token}`;
+  }
+
+  if (tieneCuerpo) {
+    encabezados['Content-Type'] = 'application/json';
+  }
+
+  return encabezados;
+}
+
 export async function api<T = unknown>(ruta: string, opciones: OpcionesApi = {}): Promise<T> {
-  void [ErrorApi, obtenerToken, olvidarSesion, router, BASE_URL, TIEMPO_MAXIMO_MS, ruta, opciones];
-  throw new Error('TODO [M1] api() sin implementar');
+  const { method = 'GET', body, params } = opciones;
+  const tieneCuerpo = body !== undefined;
+  const url = construirUrl(ruta, params);
+  const headers = construirEncabezados(tieneCuerpo);
+
+  const controlador = new AbortController();
+  const temporizador = setTimeout(() => controlador.abort(), TIEMPO_MAXIMO_MS);
+
+  let respuesta: Response;
+  try {
+    respuesta = await fetch(url, {
+      method,
+      headers,
+      body: tieneCuerpo ? JSON.stringify(body) : undefined,
+      signal: controlador.signal,
+    });
+  } catch {
+    clearTimeout(temporizador);
+    throw new ErrorApi(0, { mensaje: 'No fue posible conectar con la API.' });
+  }
+
+  try {
+    if (respuesta.status === 204) {
+      return null as T;
+    }
+
+    const cuerpo = await respuesta.json().catch(() => {
+      if (controlador.signal.aborted) {
+        throw new ErrorApi(0, { mensaje: 'No fue posible conectar con la API.' });
+      }
+      return null;
+    });
+
+    if (!respuesta.ok) {
+      if (respuesta.status === 401 && ruta !== '/login') {
+        await olvidarSesion();
+        await router.replace('/login');
+      }
+      throw new ErrorApi(respuesta.status, cuerpo);
+    }
+
+    return cuerpo as T;
+  } finally {
+    clearTimeout(temporizador);
+  }
 }
