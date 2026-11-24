@@ -24,9 +24,43 @@ export const obtenerToken = () => token.value;
  *   await SecureStorage.set(clave, valor)   ·   await SecureStorage.get(clave)   ·   await SecureStorage.remove(clave)
  */
 
+interface RespuestaLogin {
+  token: string;
+  usuario: Usuario;
+}
+
+function intentarParsearJson(texto: string): unknown {
+  try {
+    return JSON.parse(texto);
+  } catch {
+    return null;
+  }
+}
+
+function parsearUsuario(valor: unknown): Usuario | null {
+  const candidato = typeof valor === 'string' ? intentarParsearJson(valor) : valor;
+  if (
+    candidato &&
+    typeof candidato === 'object' &&
+    typeof (candidato as Usuario).id === 'number' &&
+    typeof (candidato as Usuario).nombre === 'string'
+  ) {
+    return {
+      id: (candidato as Usuario).id,
+      nombre: (candidato as Usuario).nombre,
+    };
+  }
+  return null;
+}
+
 /** TODO [M2] Borrar token y usuario de la memoria (refs) y del almacenamiento cifrado. */
 export async function olvidarSesion() {
-  // TODO [M2]
+  token.value = null;
+  usuario.value = null;
+  await Promise.allSettled([
+    SecureStorage.remove(CLAVE_TOKEN),
+    SecureStorage.remove(CLAVE_USUARIO),
+  ]);
 }
 
 export function useAuth() {
@@ -41,8 +75,22 @@ export function useAuth() {
    *  No atrape el error: LoginPage.vue ya muestra los 422.
    */
   async function login(email: string, password: string) {
-    void [email, password, api, Device, SecureStorage, CLAVE_TOKEN, CLAVE_USUARIO];
-    throw new Error('TODO [M2] login sin implementar');
+    const info = await Device.getInfo();
+    const device_name = `${info.platform} ${info.model}`.trim().slice(0, 60);
+
+    const respuesta = await api<RespuestaLogin>('/login', {
+      method: 'POST',
+      body: { email, password, device_name },
+    });
+
+    token.value = respuesta.token;
+    usuario.value = respuesta.usuario;
+    tokenCargado = true;
+
+    await Promise.all([
+      SecureStorage.set(CLAVE_TOKEN, respuesta.token),
+      SecureStorage.set(CLAVE_USUARIO, { ...respuesta.usuario }),
+    ]);
   }
 
   /**
@@ -51,7 +99,22 @@ export function useAuth() {
    *  Debe ejecutarse una sola vez (use la bandera tokenCargado).
    */
   async function cargarToken() {
-    void tokenCargado;
+    if (tokenCargado) return;
+    tokenCargado = true;
+
+    try {
+      const [tokenGuardado, usuarioGuardado] = await Promise.all([
+        SecureStorage.get(CLAVE_TOKEN),
+        SecureStorage.get(CLAVE_USUARIO),
+      ]);
+
+      if (typeof tokenGuardado === 'string' && tokenGuardado.length > 0) {
+        token.value = tokenGuardado;
+        usuario.value = parsearUsuario(usuarioGuardado);
+      }
+    } catch {
+      await olvidarSesion();
+    }
   }
 
   /**
@@ -60,7 +123,13 @@ export function useAuth() {
    *  aunque la API falle (sin red o token vencido).
    */
   async function cerrarSesion() {
-    // TODO [M2]
+    try {
+      await api<null>('/logout', { method: 'POST' });
+    } catch {
+      // Si no hay red o el token ya venció, igual debe borrarse la sesión local.
+    } finally {
+      await olvidarSesion();
+    }
   }
 
   return { usuario, estaAutenticado, login, cargarToken, cerrarSesion };
